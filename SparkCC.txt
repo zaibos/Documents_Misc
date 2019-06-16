@@ -1,0 +1,71 @@
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+
+a=[(1121,'05-sep-2018',5000,'Scheduled Payment'),(1234,'07-sep-2018',25000,'Online'),(1345,'09-sep-2018',45000,'POS'),(1432,'21-sep-2018',15000,'Scheduled Payment'),(1567,'3-oct-2018',25000,'Online'),(1678,'5-oct-2018',95000,'POS'),(1745,'9-oct-2018',55000,'Scheduled Payment')]
+rdd=sc.parallelize(a)
+rdd.collect()
+
+schema=StructType([StructField('Id',IntegerType(),False),StructField('Date',StringType(),False),StructField('Amount',IntegerType(),False),StructField('Type',StringType(),False)])         
+df=sqlContext.createDataFrame(rdd,schema)
+df.show()
+exp_df=df.withColumn('Month',month(add_months(to_date("Date","dd-MMMMM-yyyy"),1)))
+
+df_point=exp_df.withColumn("TPoints", when(df.Type == "Scheduled Payment",expr("8*(Amount/1000)")).when(df.Type == "Online",expr("7*(Amount/1000)")).otherwise(expr("5*(Amount/1000)")).cast(IntegerType()))
+
+df_point.show()
+
+//+----+-----------+------+-----------------+-----+-------+
+|  Id|       Date|Amount|             Type|Month|TPoints|
++----+-----------+------+-----------------+-----+-------+
+|1121|05-sep-2018|  5000|Scheduled Payment|   10|     40|
+|1234|07-sep-2018| 25000|           Online|   10|    175|
+|1345|09-sep-2018| 45000|              POS|   10|    225|
+|1432|21-sep-2018| 15000|Scheduled Payment|   10|    120|
+|1567| 3-oct-2018| 25000|           Online|   11|    175|
+|1678| 5-oct-2018| 95000|              POS|   11|    475|
+|1745| 9-oct-2018| 55000|Scheduled Payment|   11|    440|
++----+-----------+------+-----------------+-----+-------+//
+
+
+schema1=StructType([StructField('TaxId',IntegerType(),False),StructField('Date',StringType(),False),StructField('TrnsAmount',IntegerType(),False),StructField('TrnsType',StringType(),False)])
+b=[(6789,'05-10-2018',109000,'Cheque'),(7088,'07-11-2018',120000,'Online')]
+rdd1=sc.parallelize(b) 
+df1=sqlContext.createDataFrame(rdd1,schema1)
+pay_df=df1.withColumn('Month',month(to_date("Date","dd-MM-yyyy")))
+
+pay_df.show()
+
+//+-----+----------+----------+--------+-----+
+|TaxId|      Date|TrnsAmount|TrnsType|Month|
++-----+----------+----------+--------+-----+
+| 6789|05-10-2018|    109000|  Cheque|   10|
+| 7088|07-11-2018|    120000|  Online|   11|
++-----+----------+----------+--------+-----+//
+
+
+join_result=df_point.join(pay_df,df_point.Month==pay_df.Month).groupby(pay_df.Month,pay_df.TrnsAmount).agg(sum(df_point.Amount).alias('Exp_Amount'),sum(df_point.TPoints).alias('Rewards'))
+
+//+-----+----------+----------+-------+
+|Month|TrnsAmount|Exp_Amount|Rewards|
++-----+----------+----------+-------+
+|   10|    109000|     90000|    560|
+|   11|    120000|    175000|   1090|
++-----+----------+----------+-------+//
+
+sep_data=join_result.filter(join_result.Month == 10)
+
+SEP_DF=sep_data.withColumn('Outstanding',lit(19000)).withColumn('Pre_Rewards',lit(236)).withColumn('Name',lit("Ashwin"))
+SEP_DF.show()
+//+-----+----------+----------+-------+-----------+-----------+------+
+|Month|TrnsAmount|Exp_Amount|Rewards|Outstanding|Pre_Rewards|  Name|
++-----+----------+----------+-------+-----------+-----------+------+
+|   10|    109000|     90000|    560|      19000|        236|Ashwin|
++-----+----------+----------+-------+-----------+-----------+------+//
+
+SEP_DF.withColumn('outstanding',expr("TrnsAmount-(Exp_Amount+Outstanding)")).withColumn('Total_Rewards',expr("Rewards+Pre_Rewards")).show()
+
+//+-----+----------+----------+-------+-----------+-----------+------+-------------+
+|Month|TrnsAmount|Exp_Amount|Rewards|outstanding|Pre_Rewards|  Name|Total_Rewards|
++-----+----------+----------+-------+-----------+-----------+------+-------------+
+|   10|    109000|     90000|    560|          0|        236|Ashwin|          796|
++-----+----------+----------+-------+-----------+-----------+------+-------------+//
